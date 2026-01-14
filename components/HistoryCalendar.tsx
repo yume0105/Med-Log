@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { Medication, DailyLog } from '../types';
+import { getTodayStr } from '../constants';
 
 interface HistoryCalendarProps {
   logs: DailyLog[];
@@ -69,7 +70,7 @@ const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, medications, se
           const day = i + 1;
           const { dateStr, status } = getDayData(day);
           const isSelected = selectedDate === dateStr;
-          const isToday = new Date().toISOString().split('T')[0] === dateStr;
+          const isTodayStr = getTodayStr() === dateStr;
 
           let bgColor = 'bg-transparent';
           let textColor = 'text-slate-600';
@@ -80,7 +81,7 @@ const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, medications, se
           } else if (status === 'partial') {
             bgColor = 'bg-amber-400';
             textColor = 'text-white';
-          } else if (isToday) {
+          } else if (isTodayStr) {
             bgColor = 'bg-blue-50';
             textColor = 'text-blue-600';
           }
@@ -91,7 +92,7 @@ const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, medications, se
                 onClick={() => onDateSelect(dateStr)}
                 className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold transition-all relative ${bgColor} ${textColor} ${
                   isSelected ? 'ring-2 ring-blue-400 ring-offset-2 scale-110 z-10' : 'hover:scale-105'
-                } ${status === 'none' && !isToday ? 'hover:bg-slate-50' : ''}`}
+                } ${status === 'none' && !isTodayStr ? 'hover:bg-slate-50' : ''}`}
               >
                 {day}
                 {status === 'complete' && <div className="absolute -top-1 -right-1 bg-white rounded-full p-0.5"><CheckCircle2 size={10} className="text-emerald-500" /></div>}

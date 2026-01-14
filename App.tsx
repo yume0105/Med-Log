@@ -116,7 +116,8 @@ const App: React.FC = () => {
   };
 
   const nextDose = useMemo(() => {
-    if (selectedDate !== getTodayStr()) return undefined;
+    const today = getTodayStr();
+    if (selectedDate !== today) return undefined;
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
     return dailyDoses.find(d => d.time >= currentTime && !selectedLog.takenIds.includes(d.doseId)) 
@@ -131,6 +132,8 @@ const App: React.FC = () => {
     return dailyDoses.map(d => ({ id: d.doseId })) as any;
   }, [dailyDoses]);
 
+  const isSelectedDateToday = selectedDate === getTodayStr();
+
   return (
     <div className="max-w-md mx-auto min-h-screen pb-24 bg-slate-50 relative overflow-x-hidden">
       
@@ -142,7 +145,7 @@ const App: React.FC = () => {
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Medy</h1>
               <p className="text-slate-500 text-sm font-medium">
-                {selectedDate === getTodayStr() ? '今日' : selectedDate} の服薬管理
+                {isSelectedDateToday ? '今日' : selectedDate} の服薬管理
               </p>
             </div>
             <button 
@@ -155,7 +158,7 @@ const App: React.FC = () => {
 
           <main className="px-6">
             {/* NEXT MEDICATION widget at top */}
-            {selectedDate === getTodayStr() && nextDose && (
+            {isSelectedDateToday && nextDose && (
               <Widget 
                 nextMed={{ ...nextDose.med, time: nextDose.time }} 
                 onTake={() => toggleMed(nextDose.med.id, nextDose.time)} 
@@ -378,7 +381,11 @@ const App: React.FC = () => {
       {/* Persistent Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-slate-100 px-12 py-5 flex justify-around items-center max-w-md mx-auto z-40">
         <button 
-          onClick={() => setActiveTab('tracker')}
+          onClick={() => {
+            setActiveTab('tracker');
+            // Homeに戻ったときに最新の今日の日付にリセットする
+            setSelectedDate(getTodayStr());
+          }}
           className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'tracker' ? 'text-blue-600' : 'text-slate-300'}`}
         >
           <div className={`p-2 rounded-xl transition-all ${activeTab === 'tracker' ? 'bg-blue-50' : 'bg-transparent'}`}>
