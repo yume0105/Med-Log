@@ -117,11 +117,14 @@ const App: React.FC = () => {
 
   const nextDose = useMemo(() => {
     const today = getTodayStr();
+    // 他の日を選択している場合はウィジェットを表示しない
     if (selectedDate !== today) return undefined;
-    const now = new Date();
-    const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    return dailyDoses.find(d => d.time >= currentTime && !selectedLog.takenIds.includes(d.doseId)) 
-           || dailyDoses.find(d => !selectedLog.takenIds.includes(d.doseId));
+    
+    // まだ服用していないドーズを抽出（時間順に並んでいる）
+    const untakenDoses = dailyDoses.filter(d => !selectedLog.takenIds.includes(d.doseId));
+    
+    // 未服用のものがあれば、それが過去の時間であっても一番最初のものを「次に飲むべきもの」として返す
+    return untakenDoses[0];
   }, [dailyDoses, selectedLog.takenIds, selectedDate]);
 
   const progress = dailyDoses.length > 0 
@@ -140,7 +143,6 @@ const App: React.FC = () => {
       {/* Tracker Content */}
       {activeTab === 'tracker' && (
         <>
-          {/* Header */}
           <header className="px-6 pt-8 pb-4 flex justify-between items-center sticky top-0 bg-slate-50/80 backdrop-blur-md z-30">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Medy</h1>
@@ -157,12 +159,14 @@ const App: React.FC = () => {
           </header>
 
           <main className="px-6">
-            {/* NEXT MEDICATION widget at top */}
-            {isSelectedDateToday && nextDose && (
+            {/* NEXT MEDICATION widget */}
+            {isSelectedDateToday && (
               <Widget 
-                nextMed={{ ...nextDose.med, time: nextDose.time }} 
-                onTake={() => toggleMed(nextDose.med.id, nextDose.time)} 
-                isTaken={selectedLog.takenIds.includes(nextDose.doseId)} 
+                nextMed={nextDose ? { ...nextDose.med, time: nextDose.time } : undefined} 
+                onTake={(id) => nextDose && toggleMed(id, nextDose.time)} 
+                isTaken={nextDose ? selectedLog.takenIds.includes(nextDose.doseId) : false}
+                allCompleted={dailyDoses.length > 0 && selectedLog.takenIds.length === dailyDoses.length}
+                hasMeds={dailyDoses.length > 0}
               />
             )}
 
@@ -383,7 +387,6 @@ const App: React.FC = () => {
         <button 
           onClick={() => {
             setActiveTab('tracker');
-            // Homeに戻ったときに最新の今日の日付にリセットする
             setSelectedDate(getTodayStr());
           }}
           className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'tracker' ? 'text-blue-600' : 'text-slate-300'}`}
