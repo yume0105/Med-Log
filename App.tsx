@@ -1,9 +1,8 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Plus, Settings2, Sparkles, X, LayoutGrid, Trash2, Clock, Info, ChevronRight, Bell } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Plus, Settings2, X, LayoutGrid, Trash2, Clock, Info, ChevronRight, Bell } from 'lucide-react';
 import { Medication, DailyLog, AppState } from './types';
 import { getTodayStr, MED_COLORS } from './constants';
-import { getMedicationAdvice } from './services/geminiService';
 import Widget from './components/Widget';
 import MedicationItem from './components/MedicationItem';
 import HistoryCalendar from './components/HistoryCalendar';
@@ -17,8 +16,6 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<DailyLog[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMed, setEditingMed] = useState<Medication | null>(null);
-  const [advice, setAdvice] = useState<string>('');
-  const [isAdviceLoading, setIsAdviceLoading] = useState(false);
 
   // Form states
   const [name, setName] = useState('');
@@ -45,21 +42,6 @@ const App: React.FC = () => {
     localStorage.setItem('medy_app_state', JSON.stringify(state));
   }, [meds, logs]);
 
-  // Fetch AI Advice
-  const fetchAdvice = useCallback(async () => {
-    if (meds.length === 0) return;
-    setIsAdviceLoading(true);
-    const res = await getMedicationAdvice(meds);
-    setAdvice(res);
-    setIsAdviceLoading(false);
-  }, [meds]);
-
-  useEffect(() => {
-    if (meds.length > 0 && !advice) {
-      fetchAdvice();
-    }
-  }, [meds.length, advice, fetchAdvice]);
-
   const selectedLog = useMemo(() => 
     logs.find(l => l.date === selectedDate) || { date: selectedDate, takenIds: [] },
   [logs, selectedDate]);
@@ -75,7 +57,7 @@ const App: React.FC = () => {
   }, [meds]);
 
   const toggleMed = (id: string, time: string) => {
-    const doseId = `${id}_${time}`;
+    const doseId = id.includes('_') ? id : `${id}_${time}`;
     setLogs(prev => {
       const existing = prev.find(l => l.date === selectedDate);
       if (existing) {
@@ -172,7 +154,7 @@ const App: React.FC = () => {
           </header>
 
           <main className="px-6">
-            {/* NEXT MEDICATION widget at top of tracker content */}
+            {/* NEXT MEDICATION widget at top */}
             {selectedDate === getTodayStr() && nextDose && (
               <Widget 
                 nextMed={{ ...nextDose.med, time: nextDose.time }} 
@@ -208,23 +190,6 @@ const App: React.FC = () => {
                  <p className="text-[9px] font-bold text-slate-400 mt-1.5 uppercase tracking-widest">RECORDED</p>
               </div>
             </div>
-
-            {advice && (
-              <div className="bg-white p-4 rounded-3xl border border-blue-50 mb-6 flex gap-3 shadow-sm shadow-blue-50/50">
-                <div className="w-10 h-10 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-500 flex-shrink-0">
-                  <Sparkles size={18} />
-                </div>
-                <div className="flex-grow">
-                  <div className="flex justify-between items-center mb-0.5">
-                    <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Medy AI Advice</p>
-                    <button onClick={fetchAdvice} className={`text-blue-300 hover:text-blue-500 transition-colors ${isAdviceLoading ? 'animate-spin' : ''}`}>
-                      <Sparkles size={12} />
-                    </button>
-                  </div>
-                  <p className="text-slate-700 text-sm leading-relaxed font-medium">{advice}</p>
-                </div>
-              </div>
-            )}
 
             <div className="mb-8">
               <h2 className="text-lg font-bold text-slate-800 mb-4 px-1">服用リスト</h2>
@@ -318,7 +283,7 @@ const App: React.FC = () => {
             </section>
             
             <div className="text-center pb-8">
-              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Version 1.2.0 • Made for Wellness</p>
+              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Version 1.2.0</p>
             </div>
           </main>
         </>
@@ -410,7 +375,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Persistent Bottom Nav - Redundant FAB removed */}
+      {/* Persistent Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-slate-100 px-12 py-5 flex justify-around items-center max-w-md mx-auto z-40">
         <button 
           onClick={() => setActiveTab('tracker')}
