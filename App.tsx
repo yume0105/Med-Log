@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Settings2, X, LayoutGrid, Trash2, Clock, Info, ChevronRight, Bell } from 'lucide-react';
-import { Medication, DailyLog, AppState } from './types';
+import { Plus, Settings2, X, LayoutGrid, Trash2, Clock, Info, ChevronRight, Bell, AlertCircle, Save, History } from 'lucide-react';
+import { Medication, DailyLog, AppState, SideEffect } from './types';
 import { getTodayStr, MED_COLORS } from './constants';
 import Widget from './components/Widget';
 import MedicationItem from './components/MedicationItem';
@@ -21,6 +21,9 @@ const App: React.FC = () => {
   const [name, setName] = useState('');
   const [dosage, setDosage] = useState('');
   const [times, setTimes] = useState<string[]>(['08:00']);
+  
+  // Side effect temp state
+  const [sideEffectText, setSideEffectText] = useState('');
 
   // Load from LocalStorage
   useEffect(() => {
@@ -43,7 +46,7 @@ const App: React.FC = () => {
   }, [meds, logs]);
 
   const selectedLog = useMemo(() => 
-    logs.find(l => l.date === selectedDate) || { date: selectedDate, takenIds: [] },
+    logs.find(l => l.date === selectedDate) || { date: selectedDate, takenIds: [], sideEffects: [] },
   [logs, selectedDate]);
 
   const dailyDoses = useMemo(() => {
@@ -67,9 +70,42 @@ const App: React.FC = () => {
           : [...existing.takenIds, doseId];
         return prev.map(l => l.date === selectedDate ? { ...l, takenIds: newTakenIds } : l);
       } else {
-        return [...prev, { date: selectedDate, takenIds: [doseId] }];
+        return [...prev, { date: selectedDate, takenIds: [doseId], sideEffects: [] }];
       }
     });
+  };
+
+  const handleSaveSideEffect = () => {
+    if (!sideEffectText.trim()) return;
+
+    const now = new Date();
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    
+    const newEntry: SideEffect = {
+      id: crypto.randomUUID(),
+      time: timeStr,
+      text: sideEffectText.trim()
+    };
+
+    setLogs(prev => {
+      const existing = prev.find(l => l.date === selectedDate);
+      if (existing) {
+        const currentEffects = existing.sideEffects || [];
+        return prev.map(l => l.date === selectedDate ? { ...l, sideEffects: [...currentEffects, newEntry] } : l);
+      } else {
+        return [...prev, { date: selectedDate, takenIds: [], sideEffects: [newEntry] }];
+      }
+    });
+
+    setSideEffectText(''); // Clear input after saving
+  };
+
+  const handleDeleteSideEffect = (id: string) => {
+    setLogs(prev => prev.map(l => 
+      l.date === selectedDate 
+        ? { ...l, sideEffects: (l.sideEffects || []).filter(se => se.id !== id) } 
+        : l
+    ));
   };
 
   const handleAddMed = (e: React.FormEvent) => {
@@ -117,13 +153,8 @@ const App: React.FC = () => {
 
   const nextDose = useMemo(() => {
     const today = getTodayStr();
-    // 他の日を選択している場合はウィジェットを表示しない
     if (selectedDate !== today) return undefined;
-    
-    // まだ服用していないドーズを抽出（時間順に並んでいる）
     const untakenDoses = dailyDoses.filter(d => !selectedLog.takenIds.includes(d.doseId));
-    
-    // 未服用のものがあれば、それが過去の時間であっても一番最初のものを「次に飲むべきもの」として返す
     return untakenDoses[0];
   }, [dailyDoses, selectedLog.takenIds, selectedDate]);
 
@@ -196,6 +227,55 @@ const App: React.FC = () => {
                  </div>
                  <p className="text-[9px] font-bold text-slate-400 mt-1.5 uppercase tracking-widest">RECORDED</p>
               </div>
+            </div>
+
+            {/* Side Effect Recording Section */}
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-6">
+              <div className="flex items-center gap-2 mb-3 px-1">
+                <AlertCircle className="text-rose-500" size={18} />
+                <h2 className="text-sm font-bold text-slate-800">副作用の記録</h2>
+              </div>
+              <div className="flex gap-2 mb-4">
+                <input 
+                  type="text" 
+                  value={sideEffectText}
+                  onChange={(e) => setSideEffectText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveSideEffect()}
+                  placeholder="副作用を記録（例: 眠気がある）"
+                  className="flex-grow bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/10 focus:border-rose-300 transition-all font-medium"
+                />
+                <button 
+                  onClick={handleSaveSideEffect}
+                  className={`p-3 rounded-xl transition-all ${!sideEffectText.trim() ? 'bg-slate-100 text-slate-400 cursor-default' : 'bg-rose-500 text-white shadow-lg shadow-rose-200 hover:bg-rose-600 active:scale-95'}`}
+                  disabled={!sideEffectText.trim()}
+                >
+                  <Save size={20} />
+                </button>
+              </div>
+
+              {/* Side Effect List */}
+              {selectedLog.sideEffects && selectedLog.sideEffects.length > 0 && (
+                <div className="space-y-2 border-t border-slate-50 pt-4">
+                  <div className="flex items-center gap-1.5 mb-2 px-1">
+                    <History size={12} className="text-slate-300" />
+                    <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">本日の記録一覧</span>
+                  </div>
+                  {selectedLog.sideEffects.slice().reverse().map(se => (
+                    <div key={se.id} className="flex items-center justify-between bg-rose-50/30 border border-rose-100/50 p-3 rounded-xl group animate-in slide-in-from-top-1 duration-200">
+                      <div className="flex items-start gap-3">
+                        <span className="text-[10px] font-black text-rose-400 bg-white px-1.5 py-0.5 rounded border border-rose-100 mt-0.5">{se.time}</span>
+                        <p className="text-sm text-slate-700 font-medium leading-tight">{se.text}</p>
+                      </div>
+                      <button 
+                        onClick={() => handleDeleteSideEffect(se.id)}
+                        className="p-1.5 text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="mb-8">
@@ -290,7 +370,7 @@ const App: React.FC = () => {
             </section>
             
             <div className="text-center pb-8">
-              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Version 1.2.0</p>
+              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Version 1.2.1</p>
             </div>
           </main>
         </>

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Medication, DailyLog } from '../types';
 import { getTodayStr } from '../constants';
 
@@ -30,11 +30,13 @@ const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, medications, se
     const log = logs.find(l => l.date === dateStr);
     
     let status: 'none' | 'partial' | 'complete' = 'none';
+    const hasSideEffect = log && log.sideEffects && log.sideEffects.length > 0;
+    
     if (log && log.takenIds.length > 0) {
       status = (medications.length > 0 && log.takenIds.length >= medications.length) ? 'complete' : 'partial';
     }
     
-    return { dateStr, status };
+    return { dateStr, status, hasSideEffect };
   };
 
   const weekDays = ['日', '月', '火', '水', '木', '金', '土'];
@@ -68,14 +70,17 @@ const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, medications, se
 
         {Array.from({ length: daysInMonth }).map((_, i) => {
           const day = i + 1;
-          const { dateStr, status } = getDayData(day);
+          const { dateStr, status, hasSideEffect } = getDayData(day);
           const isSelected = selectedDate === dateStr;
           const isTodayStr = getTodayStr() === dateStr;
 
           let bgColor = 'bg-transparent';
           let textColor = 'text-slate-600';
           
-          if (status === 'complete') {
+          if (hasSideEffect) {
+            bgColor = 'bg-rose-500';
+            textColor = 'text-white';
+          } else if (status === 'complete') {
             bgColor = 'bg-emerald-500';
             textColor = 'text-white';
           } else if (status === 'partial') {
@@ -92,10 +97,19 @@ const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, medications, se
                 onClick={() => onDateSelect(dateStr)}
                 className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold transition-all relative ${bgColor} ${textColor} ${
                   isSelected ? 'ring-2 ring-blue-400 ring-offset-2 scale-110 z-10' : 'hover:scale-105'
-                } ${status === 'none' && !isTodayStr ? 'hover:bg-slate-50' : ''}`}
+                } ${status === 'none' && !isTodayStr && !hasSideEffect ? 'hover:bg-slate-50' : ''}`}
               >
                 {day}
-                {status === 'complete' && <div className="absolute -top-1 -right-1 bg-white rounded-full p-0.5"><CheckCircle2 size={10} className="text-emerald-500" /></div>}
+                {status === 'complete' && !hasSideEffect && (
+                  <div className="absolute -top-1 -right-1 bg-white rounded-full p-0.5">
+                    <CheckCircle2 size={10} className="text-emerald-500" />
+                  </div>
+                )}
+                {hasSideEffect && (
+                  <div className="absolute -top-1 -right-1 bg-white rounded-full p-0.5 shadow-sm">
+                    <AlertTriangle size={10} className="text-rose-500 fill-rose-500" />
+                  </div>
+                )}
               </button>
             </div>
           );
