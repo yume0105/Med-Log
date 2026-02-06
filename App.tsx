@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Settings2, X, LayoutGrid, Trash2, Clock, Info, ChevronRight, Bell, AlertCircle, Save, History } from 'lucide-react';
-import { Medication, DailyLog, AppState, SideEffect } from './types';
-import { getTodayStr, MED_COLORS } from './constants';
+import { Plus, Settings2, X, LayoutGrid, Trash2, Clock, Info, ChevronRight, Bell, AlertCircle, Save, History, Calendar as CalendarIcon, Edit2 } from 'lucide-react';
+import { Medication, DailyLog, AppState, SideEffect, MedicationType, TimeSlot, TemporaryTake } from './types';
+import { getTodayStr, MED_COLORS, TIME_SLOT_LABELS, MED_TYPE_LABELS, SLOT_TIMES } from './constants';
 import Widget from './components/Widget';
 import MedicationItem from './components/MedicationItem';
 import HistoryCalendar from './components/HistoryCalendar';
@@ -20,10 +20,19 @@ const App: React.FC = () => {
   // Form states
   const [name, setName] = useState('');
   const [dosage, setDosage] = useState('');
-  const [times, setTimes] = useState<string[]>(['08:00']);
+  const [medType, setMedType] = useState<MedicationType>('continuous');
+  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>(['morning']);
+  const [endDate, setEndDate] = useState(getTodayStr());
   
   // Side effect temp state
   const [sideEffectText, setSideEffectText] = useState('');
+
+  // Auto-refresh logic (checks current time every minute to update "Next Medication")
+  const [currentTime, setCurrentTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Load from LocalStorage
   useEffect(() => {
@@ -46,21 +55,43 @@ const App: React.FC = () => {
   }, [meds, logs]);
 
   const selectedLog = useMemo(() => 
-    logs.find(l => l.date === selectedDate) || { date: selectedDate, takenIds: [], sideEffects: [] },
+    logs.find(l => l.date === selectedDate) || { date: selectedDate, takenIds: [], sideEffects: [], temporaryTakes: [] },
   [logs, selectedDate]);
 
-  const dailyDoses = useMemo(() => {
-    const doses: { med: Medication; time: string; doseId: string }[] = [];
+  // Filter meds visible on the selected date (for the tracker)
+  const visibleScheduledDoses = useMemo(() => {
+    const doses: { med: Medication; slot: TimeSlot; doseId: string }[] = [];
     meds.forEach(m => {
-      m.times.forEach(t => {
-        doses.push({ med: m, time: t, doseId: `${m.id}_${t}` });
+      if (m.type === 'temporary') return;
+      if (m.type === 'period' && m.endDate && selectedDate > m.endDate) return;
+
+      m.slots.forEach(slot => {
+        doses.push({ med: m, slot, doseId: `${m.id}_${slot}` });
       });
     });
-    return doses.sort((a, b) => a.time.localeCompare(b.time));
+    
+    // Order based on the internal defined times (morning < afternoon < evening)
+    return doses.sort((a, b) => SLOT_TIMES[a.slot].localeCompare(SLOT_TIMES[b.slot]));
+  }, [meds, selectedDate]);
+
+  // For Setting Tab: Filter out expired period meds
+  const activeMedsForSettings = useMemo(() => {
+    const today = getTodayStr();
+    return meds.filter(m => {
+      if (m.type === 'period' && m.endDate) {
+        // Only show if the end date is today or in the future
+        return m.endDate >= today;
+      }
+      return true;
+    });
   }, [meds]);
 
-  const toggleMed = (id: string, time: string) => {
-    const doseId = id.includes('_') ? id : `${id}_${time}`;
+  const visibleTemporaryMeds = useMemo(() => {
+    return meds.filter(m => m.type === 'temporary');
+  }, [meds]);
+
+  const toggleMed = (id: string, slot: TimeSlot) => {
+    const doseId = `${id}_${slot}`;
     setLogs(prev => {
       const existing = prev.find(l => l.date === selectedDate);
       if (existing) {
@@ -70,22 +101,40 @@ const App: React.FC = () => {
           : [...existing.takenIds, doseId];
         return prev.map(l => l.date === selectedDate ? { ...l, takenIds: newTakenIds } : l);
       } else {
-        return [...prev, { date: selectedDate, takenIds: [doseId], sideEffects: [] }];
+        return [...prev, { date: selectedDate, takenIds: [doseId], sideEffects: [], temporaryTakes: [] }];
       }
     });
   };
 
-  const handleSaveSideEffect = () => {
-    if (!sideEffectText.trim()) return;
-
+  const handleRecordTemporary = (medId: string) => {
     const now = new Date();
     const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    
-    const newEntry: SideEffect = {
-      id: crypto.randomUUID(),
-      time: timeStr,
-      text: sideEffectText.trim()
-    };
+    const newTake: TemporaryTake = { id: crypto.randomUUID(), medId, time: timeStr };
+
+    setLogs(prev => {
+      const existing = prev.find(l => l.date === selectedDate);
+      if (existing) {
+        const currentTakes = existing.temporaryTakes || [];
+        return prev.map(l => l.date === selectedDate ? { ...l, temporaryTakes: [...currentTakes, newTake] } : l);
+      } else {
+        return [...prev, { date: selectedDate, takenIds: [], sideEffects: [], temporaryTakes: [newTake] }];
+      }
+    });
+  };
+
+  const handleDeleteTempTake = (id: string) => {
+    setLogs(prev => prev.map(l => 
+      l.date === selectedDate 
+        ? { ...l, temporaryTakes: (l.temporaryTakes || []).filter(t => t.id !== id) } 
+        : l
+    ));
+  };
+
+  const handleSaveSideEffect = () => {
+    if (!sideEffectText.trim()) return;
+    const now = new Date();
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const newEntry: SideEffect = { id: crypto.randomUUID(), time: timeStr, text: sideEffectText.trim() };
 
     setLogs(prev => {
       const existing = prev.find(l => l.date === selectedDate);
@@ -93,45 +142,40 @@ const App: React.FC = () => {
         const currentEffects = existing.sideEffects || [];
         return prev.map(l => l.date === selectedDate ? { ...l, sideEffects: [...currentEffects, newEntry] } : l);
       } else {
-        return [...prev, { date: selectedDate, takenIds: [], sideEffects: [newEntry] }];
+        return [...prev, { date: selectedDate, takenIds: [], sideEffects: [newEntry], temporaryTakes: [] }];
       }
     });
-
-    setSideEffectText(''); // Clear input after saving
-  };
-
-  const handleDeleteSideEffect = (id: string) => {
-    setLogs(prev => prev.map(l => 
-      l.date === selectedDate 
-        ? { ...l, sideEffects: (l.sideEffects || []).filter(se => se.id !== id) } 
-        : l
-    ));
+    setSideEffectText('');
   };
 
   const handleAddMed = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !dosage || times.some(t => !t)) return;
+    if (!name || !dosage) return;
+
+    const medData: Medication = {
+      id: editingMed ? editingMed.id : crypto.randomUUID(),
+      name,
+      dosage,
+      type: medType,
+      slots: medType === 'temporary' ? [] : selectedSlots,
+      endDate: medType === 'period' ? endDate : undefined,
+      color: editingMed ? editingMed.color : MED_COLORS[Math.floor(Math.random() * MED_COLORS.length)]
+    };
 
     if (editingMed) {
-      setMeds(prev => prev.map(m => m.id === editingMed.id ? { ...m, name, dosage, times: [...times].sort() } : m));
+      setMeds(prev => prev.map(m => m.id === editingMed.id ? medData : m));
     } else {
-      const newMed: Medication = {
-        id: crypto.randomUUID(),
-        name,
-        dosage,
-        times: [...times].sort(),
-        color: MED_COLORS[Math.floor(Math.random() * MED_COLORS.length)]
-      };
-      setMeds(prev => [...prev, newMed]);
+      setMeds(prev => [...prev, medData]);
     }
-    
     resetForm();
   };
 
   const resetForm = () => {
     setName('');
     setDosage('');
-    setTimes(['08:00']);
+    setMedType('continuous');
+    setSelectedSlots(['morning']);
+    setEndDate(getTodayStr());
     setEditingMed(null);
     setIsModalOpen(false);
   };
@@ -140,157 +184,132 @@ const App: React.FC = () => {
     setEditingMed(med);
     setName(med.name);
     setDosage(med.dosage);
-    setTimes(med.times);
+    setMedType(med.type);
+    setSelectedSlots(med.slots);
+    if (med.endDate) setEndDate(med.endDate);
     setIsModalOpen(true);
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('本当に削除しますか？設定されたすべての時間が削除されます。')) {
+    if (confirm('この薬の情報を完全に削除しますか？')) {
       setMeds(prev => prev.filter(m => m.id !== id));
-      setLogs(prev => prev.map(l => ({ ...l, takenIds: l.takenIds.filter(tid => !tid.startsWith(id)) })));
     }
   };
 
-  const nextDose = useMemo(() => {
+  const nextDoseInfo = useMemo(() => {
     const today = getTodayStr();
     if (selectedDate !== today) return undefined;
-    const untakenDoses = dailyDoses.filter(d => !selectedLog.takenIds.includes(d.doseId));
-    return untakenDoses[0];
-  }, [dailyDoses, selectedLog.takenIds, selectedDate]);
+    
+    const untakenDoses = visibleScheduledDoses.filter(d => !selectedLog.takenIds.includes(d.doseId));
+    if (untakenDoses.length === 0) return undefined;
 
-  const progress = dailyDoses.length > 0 
-    ? Math.round((selectedLog.takenIds.length / dailyDoses.length) * 100) 
+    const nowStr = `${currentTime.getHours().toString().padStart(2, '0')}:${currentTime.getMinutes().toString().padStart(2, '0')}`;
+    const futureDoses = untakenDoses.filter(d => SLOT_TIMES[d.slot] >= nowStr);
+    
+    return futureDoses.length > 0 ? futureDoses[0] : untakenDoses[0];
+  }, [visibleScheduledDoses, selectedLog.takenIds, selectedDate, currentTime]);
+
+  const progress = visibleScheduledDoses.length > 0 
+    ? Math.round((selectedLog.takenIds.length / visibleScheduledDoses.length) * 100) 
     : 0;
 
-  const calendarMeds = useMemo(() => {
-    return dailyDoses.map(d => ({ id: d.doseId })) as any;
-  }, [dailyDoses]);
-
   const isSelectedDateToday = selectedDate === getTodayStr();
+
+  // Helper to get color class based on type
+  const getTypeColor = (type: MedicationType) => {
+    switch (type) {
+      case 'continuous': return 'bg-emerald-500';
+      case 'period': return 'bg-blue-500';
+      case 'temporary': return 'bg-rose-500';
+      default: return 'bg-slate-500';
+    }
+  };
+
+  const getTypeTextColor = (type: MedicationType) => {
+    switch (type) {
+      case 'continuous': return 'text-emerald-500';
+      case 'period': return 'text-blue-500';
+      case 'temporary': return 'text-rose-500';
+      default: return 'text-slate-500';
+    }
+  };
+
+  const getTypeBgColor = (type: MedicationType) => {
+    switch (type) {
+      case 'continuous': return 'bg-emerald-50';
+      case 'period': return 'bg-blue-50';
+      case 'temporary': return 'bg-rose-50';
+      default: return 'bg-slate-50';
+    }
+  };
 
   return (
     <div className="max-w-md mx-auto min-h-screen pb-24 bg-slate-50 relative overflow-x-hidden">
       
-      {/* Tracker Content */}
       {activeTab === 'tracker' && (
         <>
           <header className="px-6 pt-8 pb-4 flex justify-between items-center sticky top-0 bg-slate-50/80 backdrop-blur-md z-30">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Medy</h1>
-              <p className="text-slate-500 text-sm font-medium">
-                {isSelectedDateToday ? '今日' : selectedDate} の服薬管理
+              <h1 className="text-2xl font-black text-slate-900 tracking-tight">Medy</h1>
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">
+                {isSelectedDateToday ? 'TODAY' : selectedDate}
               </p>
             </div>
             <button 
               onClick={() => setIsModalOpen(true)}
-              className="p-3 bg-white rounded-2xl shadow-sm border border-slate-100 text-blue-600 hover:bg-slate-50 transition-colors"
+              className="p-3 bg-blue-600 rounded-2xl shadow-xl shadow-blue-100 text-white hover:bg-blue-700 transition-all active:scale-95"
             >
               <Plus size={24} />
             </button>
           </header>
 
           <main className="px-6">
-            {/* NEXT MEDICATION widget */}
             {isSelectedDateToday && (
               <Widget 
-                nextMed={nextDose ? { ...nextDose.med, time: nextDose.time } : undefined} 
-                onTake={(id) => nextDose && toggleMed(id, nextDose.time)} 
-                isTaken={nextDose ? selectedLog.takenIds.includes(nextDose.doseId) : false}
-                allCompleted={dailyDoses.length > 0 && selectedLog.takenIds.length === dailyDoses.length}
-                hasMeds={dailyDoses.length > 0}
+                nextMed={nextDoseInfo ? { ...nextDoseInfo.med, slot: nextDoseInfo.slot } : undefined} 
+                onTake={toggleMed} 
+                allCompleted={visibleScheduledDoses.length > 0 && selectedLog.takenIds.length === visibleScheduledDoses.length}
+                hasMeds={visibleScheduledDoses.length > 0}
               />
             )}
 
             <HistoryCalendar 
               logs={logs} 
-              medications={calendarMeds} 
+              medications={visibleScheduledDoses as any} 
               selectedDate={selectedDate} 
               onDateSelect={setSelectedDate} 
             />
 
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-6 flex items-center justify-between">
-              <div className="flex-grow">
-                <div className="flex justify-between items-end mb-2.5 px-1">
-                  <span className="text-sm font-semibold text-slate-400">達成率</span>
-                  <span className="text-xl font-black text-slate-800 tracking-tight">{progress}%</span>
-                </div>
-                <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full transition-all duration-700 ease-out ${progress === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`}
-                    style={{ width: `${progress}%` }} 
-                  />
-                </div>
-              </div>
-              <div className="ml-5 pl-5 border-l border-slate-100 flex flex-col items-center">
-                 <div className="text-2xl font-black text-slate-800 leading-none">
-                  {selectedLog.takenIds.length}<span className="text-xs text-slate-300 font-bold ml-0.5">/ {dailyDoses.length}</span>
-                 </div>
-                 <p className="text-[9px] font-bold text-slate-400 mt-1.5 uppercase tracking-widest">RECORDED</p>
-              </div>
-            </div>
-
-            {/* Side Effect Recording Section */}
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-6">
-              <div className="flex items-center gap-2 mb-3 px-1">
-                <AlertCircle className="text-rose-500" size={18} />
-                <h2 className="text-sm font-bold text-slate-800">副作用の記録</h2>
-              </div>
-              <div className="flex gap-2 mb-4">
-                <input 
-                  type="text" 
-                  value={sideEffectText}
-                  onChange={(e) => setSideEffectText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSaveSideEffect()}
-                  placeholder="副作用を記録（例: 眠気がある）"
-                  className="flex-grow bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/10 focus:border-rose-300 transition-all font-medium"
-                />
-                <button 
-                  onClick={handleSaveSideEffect}
-                  className={`p-3 rounded-xl transition-all ${!sideEffectText.trim() ? 'bg-slate-100 text-slate-400 cursor-default' : 'bg-rose-500 text-white shadow-lg shadow-rose-200 hover:bg-rose-600 active:scale-95'}`}
-                  disabled={!sideEffectText.trim()}
-                >
-                  <Save size={20} />
-                </button>
-              </div>
-
-              {/* Side Effect List */}
-              {selectedLog.sideEffects && selectedLog.sideEffects.length > 0 && (
-                <div className="space-y-2 border-t border-slate-50 pt-4">
-                  <div className="flex items-center gap-1.5 mb-2 px-1">
-                    <History size={12} className="text-slate-300" />
-                    <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">本日の記録一覧</span>
+            {visibleScheduledDoses.length > 0 && (
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-6 flex items-center justify-between">
+                <div className="flex-grow">
+                  <div className="flex justify-between items-end mb-2.5 px-1">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">予定の達成率</span>
+                    <span className="text-xl font-black text-slate-800">{progress}%</span>
                   </div>
-                  {selectedLog.sideEffects.slice().reverse().map(se => (
-                    <div key={se.id} className="flex items-center justify-between bg-rose-50/30 border border-rose-100/50 p-3 rounded-xl group animate-in slide-in-from-top-1 duration-200">
-                      <div className="flex items-start gap-3">
-                        <span className="text-[10px] font-black text-rose-400 bg-white px-1.5 py-0.5 rounded border border-rose-100 mt-0.5">{se.time}</span>
-                        <p className="text-sm text-slate-700 font-medium leading-tight">{se.text}</p>
-                      </div>
-                      <button 
-                        onClick={() => handleDeleteSideEffect(se.id)}
-                        className="p-1.5 text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
+                  <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full transition-all duration-700 ease-out ${progress === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`}
+                      style={{ width: `${progress}%` }} 
+                    />
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             <div className="mb-8">
-              <h2 className="text-lg font-bold text-slate-800 mb-4 px-1">服用リスト</h2>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 px-1">服用予定</h2>
               <div className="space-y-1">
-                {dailyDoses.length === 0 ? (
-                  <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-slate-200">
-                    <p className="text-slate-400 font-medium">薬を登録して管理を開始しましょう</p>
+                {visibleScheduledDoses.length === 0 ? (
+                  <div className="text-center py-8 bg-white/50 rounded-3xl border border-dashed border-slate-200">
+                    <p className="text-slate-400 text-xs font-medium">本日の予定はありません</p>
                   </div>
                 ) : (
-                  dailyDoses.map(({ med, time, doseId }) => (
+                  visibleScheduledDoses.map(({ med, slot, doseId }) => (
                     <MedicationItem 
                       key={doseId} 
                       med={med}
-                      displayTime={time}
+                      slot={slot}
                       isTaken={selectedLog.takenIds.includes(doseId)}
                       onToggle={toggleMed}
                       onDelete={handleDelete}
@@ -300,94 +319,182 @@ const App: React.FC = () => {
                 )}
               </div>
             </div>
-          </main>
-        </>
-      )}
 
-      {/* Settings Content */}
-      {activeTab === 'settings' && (
-        <>
-          <header className="px-6 pt-8 pb-4 flex justify-between items-center sticky top-0 bg-slate-50/80 backdrop-blur-md z-30">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">設定</h1>
-              <p className="text-slate-500 text-sm font-medium">アプリの管理と薬の一覧</p>
-            </div>
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="p-3 bg-blue-600 rounded-2xl shadow-lg shadow-blue-100 text-white hover:bg-blue-700 transition-colors"
-            >
-              <Plus size={24} />
-            </button>
-          </header>
+            {visibleTemporaryMeds.length > 0 && (
+              <div className="mb-8">
+                <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 px-1">一時的な服薬</h2>
+                <div className="space-y-1">
+                  {visibleTemporaryMeds.map(med => (
+                    <MedicationItem 
+                      key={med.id} 
+                      med={med}
+                      onRecordTemporary={handleRecordTemporary}
+                      onDelete={handleDelete}
+                      onEdit={handleEdit}
+                    />
+                  ))}
+                </div>
 
-          <main className="px-6 space-y-6">
-            <section className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100">
-              <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 ml-1">登録されている薬</h2>
-              {meds.length === 0 ? (
-                <p className="text-slate-400 text-sm py-4 text-center">登録されている薬はありません</p>
-              ) : (
-                <div className="divide-y divide-slate-50">
-                  {meds.map(med => (
-                    <div key={med.id} className="py-4 flex justify-between items-center group">
-                      <div>
-                        <h3 className="font-bold text-slate-800">{med.name}</h3>
-                        <p className="text-xs text-slate-400">{med.dosage} • {med.times.join(', ')}</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={() => handleEdit(med)} className="p-2 text-blue-500 hover:bg-blue-50 rounded-full transition-colors">
-                          <Clock size={18} />
-                        </button>
-                        <button onClick={() => handleDelete(med.id)} className="p-2 text-rose-400 hover:bg-rose-50 rounded-full transition-colors">
-                          <Trash2 size={18} />
-                        </button>
+                {selectedLog.temporaryTakes && selectedLog.temporaryTakes.length > 0 && (
+                  <div className="mt-4 space-y-2 bg-white/40 p-3 rounded-2xl border border-slate-100">
+                     <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mb-2 px-1">記録</p>
+                     {selectedLog.temporaryTakes.slice().reverse().map(take => {
+                        const med = meds.find(m => m.id === take.medId);
+                        return (
+                          <div key={take.id} className="flex items-center justify-between text-xs font-bold text-slate-500 bg-white p-2 rounded-xl shadow-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-400">{take.time}</span>
+                              <span>{med?.name || '不明な薬'} を服用</span>
+                            </div>
+                            <button onClick={() => handleDeleteTempTake(take.id)} className="text-slate-300 hover:text-rose-400 transition-colors">
+                              <X size={14} />
+                            </button>
+                          </div>
+                        );
+                     })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 mb-8">
+              <div className="flex items-center gap-2 mb-3 px-1">
+                <AlertCircle className="text-rose-500" size={18} />
+                <h2 className="text-sm font-bold text-slate-800">副作用の記録</h2>
+              </div>
+              <div className="flex gap-2 mb-4">
+                <input 
+                  type="text" 
+                  value={sideEffectText}
+                  onChange={(e) => setSideEffectText(e.target.value)}
+                  placeholder="例: 眠気がある"
+                  className="flex-grow bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/10 focus:border-rose-300 transition-all font-medium"
+                />
+                <button 
+                  onClick={handleSaveSideEffect}
+                  className={`p-3 rounded-xl transition-all ${!sideEffectText.trim() ? 'bg-slate-100 text-slate-400' : 'bg-rose-500 text-white shadow-lg shadow-rose-200 hover:bg-rose-600 active:scale-95'}`}
+                  disabled={!sideEffectText.trim()}
+                >
+                  <Save size={20} />
+                </button>
+              </div>
+
+              {selectedLog.sideEffects && selectedLog.sideEffects.length > 0 && (
+                <div className="space-y-2 border-t border-slate-50 pt-4">
+                  {selectedLog.sideEffects.slice().reverse().map(se => (
+                    <div key={se.id} className="flex items-center justify-between bg-rose-50/30 p-2.5 rounded-xl">
+                      <div className="flex items-start gap-3">
+                        <span className="text-[10px] font-black text-rose-400 bg-white px-1.5 py-0.5 rounded border border-rose-100 mt-0.5">{se.time}</span>
+                        <p className="text-sm text-slate-700 font-medium">{se.text}</p>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-            </section>
-
-            <section className="space-y-3">
-              <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 ml-1">アプリ設定</h2>
-              <button className="w-full bg-white p-4 rounded-2xl flex items-center justify-between border border-slate-100 hover:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center">
-                    <Bell size={20} />
-                  </div>
-                  <span className="font-bold text-slate-700">通知設定</span>
-                </div>
-                <ChevronRight className="text-slate-300" size={20} />
-              </button>
-              <button className="w-full bg-white p-4 rounded-2xl flex items-center justify-between border border-slate-100 hover:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-slate-50 text-slate-500 flex items-center justify-center">
-                    <Info size={20} />
-                  </div>
-                  <span className="font-bold text-slate-700">Medyについて</span>
-                </div>
-                <ChevronRight className="text-slate-300" size={20} />
-              </button>
-            </section>
-            
-            <div className="text-center pb-8">
-              <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Version 1.2.1</p>
             </div>
           </main>
         </>
       )}
 
-      {/* Modal for Add/Edit */}
+      {activeTab === 'settings' && (
+        <>
+          <header className="px-6 pt-8 pb-4 sticky top-0 bg-slate-50/80 backdrop-blur-md z-30">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">設定</h1>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-0.5">Application Settings</p>
+          </header>
+
+          <main className="px-6 pb-12">
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-50">
+              <div className="px-5 py-4 bg-slate-50/50">
+                <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">登録済みの薬</h2>
+              </div>
+              
+              {activeMedsForSettings.length === 0 ? (
+                <div className="px-8 py-12 text-center">
+                   <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center mx-auto mb-3 text-slate-300">
+                     <Clock size={24} />
+                   </div>
+                   <p className="text-slate-400 text-sm font-medium">登録されている薬はありません</p>
+                </div>
+              ) : (
+                activeMedsForSettings.map(med => (
+                  <div key={med.id} className="flex items-center justify-between px-5 py-4 bg-white hover:bg-slate-50 transition-colors group">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-1.5 h-10 rounded-full ${getTypeColor(med.type)}`} />
+                      <div>
+                        <h3 className="font-bold text-slate-800">{med.name}</h3>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className={`text-[10px] font-black uppercase tracking-tighter ${getTypeTextColor(med.type)}`}>
+                            {MED_TYPE_LABELS[med.type]}
+                          </span>
+                          <span className="w-1 h-1 bg-slate-200 rounded-full" />
+                          <span className="text-[10px] font-black text-slate-500 uppercase">{med.dosage}</span>
+                          {med.type === 'period' && (
+                            <>
+                              <span className="w-1 h-1 bg-slate-200 rounded-full" />
+                              <span className="text-[10px] font-black text-rose-400 uppercase">~{med.endDate?.split('-').slice(1).join('/')}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      <button 
+                        onClick={() => handleEdit(med)}
+                        className="p-2.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(med.id)}
+                        className="p-2.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+
+              <div className="p-4 bg-slate-50/20">
+                <button 
+                  onClick={() => { resetForm(); setIsModalOpen(true); }}
+                  className="w-full flex items-center justify-center gap-2 py-4 bg-white border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-sm hover:border-blue-400 hover:text-blue-500 transition-all active:scale-[0.98]"
+                >
+                  <Plus size={18} />
+                  <span>新しい薬を追加する</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-8 bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+               <div className="px-5 py-4 bg-slate-50/50 border-b border-slate-50">
+                  <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">アプリ情報</h2>
+               </div>
+               <div className="px-5 py-4 flex justify-between items-center">
+                  <span className="text-sm font-bold text-slate-600">バージョン</span>
+                  <span className="text-xs font-black text-slate-400">1.2.0</span>
+               </div>
+               <div className="px-5 py-4 flex justify-between items-center border-t border-slate-50">
+                  <span className="text-sm font-bold text-slate-600">データ保存場所</span>
+                  <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Local Storage</span>
+               </div>
+            </div>
+          </main>
+        </>
+      )}
+
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/40 backdrop-blur-sm p-0 sm:p-4">
-          <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto no-scrollbar">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8 animate-in slide-in-from-bottom duration-300 max-h-[95vh] overflow-y-auto no-scrollbar">
             <div className="flex justify-between items-center mb-8">
-              <h2 className="text-xl font-black text-slate-800">{editingMed ? '薬を編集' : '新しい薬を追加'}</h2>
+              <h2 className="text-xl font-black text-slate-800 tracking-tight">{editingMed ? '薬を編集' : '新しい薬を追加'}</h2>
               <button onClick={resetForm} className="p-2 text-slate-300 hover:bg-slate-50 rounded-full transition-colors">
                 <X size={24} />
               </button>
             </div>
 
-            <form onSubmit={handleAddMed} className="space-y-5">
+            <form onSubmit={handleAddMed} className="space-y-6">
               <div>
                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">薬の名前</label>
                 <input 
@@ -395,7 +502,7 @@ const App: React.FC = () => {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="例: パブロン"
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-semibold"
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold"
                   required
                 />
               </div>
@@ -407,68 +514,81 @@ const App: React.FC = () => {
                   value={dosage}
                   onChange={(e) => setDosage(e.target.value)}
                   placeholder="例: 1錠"
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-semibold"
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">服用時間</label>
-                <div className="space-y-3">
-                  {times.map((t, idx) => (
-                    <div key={idx} className="flex gap-2">
-                      <div className="relative flex-grow">
-                        <input 
-                          type="time" 
-                          value={t}
-                          onChange={(e) => {
-                            const newTimes = [...times];
-                            newTimes[idx] = e.target.value;
-                            setTimes(newTimes);
-                          }}
-                          className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-semibold"
-                          required
-                        />
-                      </div>
-                      {times.length > 1 && (
-                        <button 
-                          type="button" 
-                          onClick={() => setTimes(times.filter((_, i) => i !== idx))}
-                          className="p-4 bg-rose-50 text-rose-500 rounded-2xl hover:bg-rose-100 transition-colors"
-                        >
-                          <Trash2 size={20} />
-                        </button>
-                      )}
-                    </div>
+                <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">種類</label>
+                <div className="flex gap-2">
+                  {(['continuous', 'period', 'temporary'] as MedicationType[]).map(type => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setMedType(type)}
+                      className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${medType === type ? 'bg-slate-800 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+                    >
+                      {MED_TYPE_LABELS[type]}
+                    </button>
                   ))}
-                  <button 
-                    type="button"
-                    onClick={() => setTimes([...times, '12:00'])}
-                    className="w-full py-3 border-2 border-dashed border-slate-100 rounded-2xl text-slate-400 text-xs font-bold flex items-center justify-center gap-2 hover:border-blue-100 hover:text-blue-400 transition-all"
-                  >
-                    <Plus size={16} /> 時間を追加する
-                  </button>
                 </div>
               </div>
 
+              {medType !== 'temporary' && (
+                <div>
+                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">服用タイミング</label>
+                  <div className="flex gap-2">
+                    {(['morning', 'afternoon', 'evening'] as TimeSlot[]).map(slot => (
+                      <button
+                        key={slot}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSlots(prev => 
+                            prev.includes(slot) ? prev.filter(s => s !== slot) : [...prev, slot]
+                          );
+                        }}
+                        className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${selectedSlots.includes(slot) ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+                      >
+                        {TIME_SLOT_LABELS[slot]}
+                      </button>
+                    ))}
+                  </div>
+                  {selectedSlots.length === 0 && <p className="text-rose-400 text-[10px] font-bold mt-2 ml-1">※少なくとも1つ選択してください</p>}
+                </div>
+              )}
+
+              {medType === 'period' && (
+                <div className="animate-in slide-in-from-top-2">
+                  <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">いつまで表示しますか？</label>
+                  <div className="relative">
+                    <input 
+                      type="date" 
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold"
+                      required
+                    />
+                    <CalendarIcon size={18} className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-300 pointer-events-none" />
+                  </div>
+                </div>
+              )}
+
               <button 
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-5 rounded-2xl shadow-xl shadow-blue-100 transition-all active:scale-[0.98] mt-6 tracking-wider uppercase text-sm"
+                disabled={medType !== 'temporary' && selectedSlots.length === 0}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-30 text-white font-black py-5 rounded-[1.5rem] shadow-2xl shadow-blue-100 transition-all active:scale-[0.98] mt-4 tracking-widest uppercase text-sm"
               >
-                {editingMed ? '変更を保存' : '保存する'}
+                {editingMed ? '変更を保存' : '登録する'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Persistent Bottom Nav */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-slate-100 px-12 py-5 flex justify-around items-center max-w-md mx-auto z-40">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-100 px-12 py-5 flex justify-around items-center max-w-md mx-auto z-40">
         <button 
-          onClick={() => {
-            setActiveTab('tracker');
-            setSelectedDate(getTodayStr());
-          }}
+          onClick={() => { setActiveTab('tracker'); setSelectedDate(getTodayStr()); }}
           className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'tracker' ? 'text-blue-600' : 'text-slate-300'}`}
         >
           <div className={`p-2 rounded-xl transition-all ${activeTab === 'tracker' ? 'bg-blue-50' : 'bg-transparent'}`}>
@@ -484,7 +604,7 @@ const App: React.FC = () => {
           <div className={`p-2 rounded-xl transition-all ${activeTab === 'settings' ? 'bg-blue-50' : 'bg-transparent'}`}>
             <Settings2 size={24} strokeWidth={activeTab === 'settings' ? 2.5 : 2} />
           </div>
-          <span className="text-[10px] font-black uppercase tracking-widest">Settings</span>
+          <span className="text-[10px] font-black uppercase tracking-widest">SETTING</span>
         </button>
       </nav>
     </div>
